@@ -10,12 +10,128 @@ import inspect
 import logging
 import os
 import platform
+import shutil
 from pathlib import Path
 
 
 my_os = platform.system()
 
+
+def _find_cubemx_executable():
+    """Try to locate STM32CubeMX executable automatically.
+
+    Strategies (in order):
+    - Environment variables (common names)
+    - executable on PATH (shutil.which)
+    - common installation locations per-OS
+    Returns absolute string path to executable or empty string if not found.
+    """
+    env_vars = [
+        'STM32CUBEMX_HOME', 'STM32_CUBEMX_HOME', 'STM32_CUBEMX', 'STM32CUBEMX',
+        'STM32_CUBEMX_PATH', 'STM32CUBEMX_PATH'
+    ]
+
+    # Check environment variables
+    for v in env_vars:
+        val = os.environ.get(v)
+        if not val:
+            continue
+        p = Path(val)
+        if p.exists():
+            # If it's a directory, try to find the executable inside
+            if p.is_dir():
+                candidates = [
+                    p / 'STM32CubeMX',
+                    p / 'STM32CubeMX.exe',
+                    p / 'STM32CubeMX.app' / 'Contents' / 'MacOS' / 'STM32CubeMX'
+                ]
+                for c in candidates:
+                    if c.exists():
+                        return str(c)
+            else:
+                return str(p)
+
+    # Check PATH
+    exec_name = 'STM32CubeMX.exe' if my_os == 'Windows' else 'STM32CubeMX'
+    which_path = shutil.which(exec_name) or shutil.which('STM32CubeMX')
+    if which_path:
+        return which_path
+
+    # Common locations
+    common = []
+    if my_os == 'Windows':
+        common += [
+            Path('C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX.exe'),
+            Path('C:/Program Files (x86)/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX.exe'),
+            Path('C:/Program Files/STMicroelectronics/STM32CubeMX/STM32CubeMX.exe'),
+            Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs' / 'STM32CubeMX' / 'STM32CubeMX.exe'
+        ]
+    elif my_os == 'Darwin':
+        common += [
+            Path('/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOS/STM32CubeMX'),
+        ]
+    elif my_os == 'Linux':
+        common += [
+            Path.home() / 'STM32CubeMX' / 'STM32CubeMX',
+            Path('/usr/local/bin/STM32CubeMX'),
+            Path('/usr/bin/STM32CubeMX'),
+        ]
+
+    for p in common:
+        try:
+            if p and p.exists():
+                return str(p)
+        except Exception:
+            continue
+
+    return ''
+
+
+def _find_java_bundled_with_cubemx(cubemx_path):
+    """Given path to cubemx executable, try to find bundled java inside the CubeMX installation.
+
+    Typical layout on Windows: <install>/jre/bin/java.exe
+    Returns absolute string path to java executable or empty string if not found.
+    """
+    if not cubemx_path:
+        return ''
+    p = Path(cubemx_path)
+    # If path points to the app bundle binary on macOS, go up appropriately
+    candidates = []
+    # If cubemx is an executable file, its parent folder is the install folder
+    install_dir = p.parent
+    candidates.append(install_dir / 'jre' / 'bin' / ('java.exe' if my_os == 'Windows' else 'java'))
+    # Some installers place jre one level up
+    candidates.append(install_dir.parent / 'jre' / 'bin' / ('java.exe' if my_os == 'Windows' else 'java'))
+    # On macOS inside app bundle
+    candidates.append(p.parent / 'jre' / 'bin' / 'java')
+
+    for c in candidates:
+        try:
+            if c.exists() and os.access(str(c), os.X_OK):
+                return str(c)
+        except Exception:
+            continue
+
+    return ''
+
 config_file_name = 'stm32pio.ini'
+
+# Detect CubeMX and its bundled Java at import time (but fall back to previous defaults if detection fails)
+_detected_cubemx = _find_cubemx_executable()
+if not _detected_cubemx:
+    # keep previous defaults as fallback
+    _detected_cubemx = (
+        '/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX' if my_os == 'Darwin' else
+        str(Path.home() / 'STM32CubeMX/STM32CubeMX') if my_os == 'Linux' else
+        'C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX.exe' if my_os == 'Windows' else ''
+    )
+
+_detected_java = _find_java_bundled_with_cubemx(_detected_cubemx)
+if not _detected_java:
+    _detected_java = (
+        'C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/jre/bin/java.exe' if my_os == 'Windows' else 'None'
+    )
 
 config_default = dict(
     # "app" section is used for listing commands/paths of utilized programs
@@ -31,20 +147,12 @@ config_default = dict(
 
         # STM32CubeMX doesn't register itself in PATH so we specify a full path to it. Here are default ones (i.e. when
         # you've installed CubeMX on your system)
-        'cubemx_cmd':
-            # macOS default: 'Applications' folder
-            '/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX' if my_os == 'Darwin' else
-            # Linux (at least Ubuntu) default: home directory
-            str(Path.home() / 'STM32CubeMX/STM32CubeMX') if my_os == 'Linux' else
-            # Windows default: Program Files
-            'C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/STM32CubeMX.exe' if my_os == 'Windows' else '',
+        'cubemx_cmd': _detected_cubemx,
 
         # If you're on Windows or you have CubeMX version below 6.3.0, the Java command (which CubeMX is written on)
         # should be specified. For CubeMX starting from 6.3.0 JRE is bundled alongside, otherwise it must be installed
         # by a user yourself separately
-        'java_cmd':
-            'C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeMX/jre/bin/java.exe'
-            if my_os == 'Windows' else 'None',
+        'java_cmd': _detected_java,
     },
 
     # "project" section focuses on parameters of the concrete stm32pio project

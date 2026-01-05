@@ -6,6 +6,7 @@ import difflib
 import logging
 import subprocess
 import tempfile
+import time
 from configparser import ConfigParser
 from io import StringIO
 from pathlib import Path
@@ -181,7 +182,21 @@ class CubeMX:
         else:
             return completed_process, std_output
         finally:
-            Path(cubemx_script_name).unlink()
+            # On Windows, the temp file might be locked by the system or CubeMX process
+            # Retry deletion with a small delay
+            temp_file_path = Path(cubemx_script_name)
+            max_retries = 5
+            retry_delay = 0.1
+            for attempt in range(max_retries):
+                try:
+                    temp_file_path.unlink()
+                    break
+                except PermissionError:
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        # Log warning but don't fail the operation
+                        self.logger.warning(f"Could not delete temporary file {cubemx_script_name} after {max_retries} attempts")
 
     def generate_code(self, script_template: str) -> int:
         """
