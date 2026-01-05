@@ -104,8 +104,8 @@ class IocConfig(ConfigParser):
         def w(message: str):
             self.logger.warning(self.path.name + ': ' + message)
 
-        if self.get(s, 'ProjectManager.TargetToolchain', fallback='') != 'Other Toolchains (GPDSC)':
-            w('It is recommended to use value "Other Toolchains (GPDSC)" for parameter '
+        if self.get(s, 'ProjectManager.TargetToolchain', fallback='') != 'CMake':
+            w('It is recommended to use value "CMake" for parameter '
               '"Project Manager –> Project -> Toolchain/IDE"')
 
         if self.getint(s, 'ProjectManager.LibraryCopy', fallback=None) != 1:
